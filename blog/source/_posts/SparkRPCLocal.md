@@ -4,7 +4,7 @@ date: 2018-04-25 23:56:21
 tags: spark-internal
 ---
 
-# Spark RPC 核心逻辑架构
+# Spark RPC 核心架构
 
   Spark RPC 的核心逻辑架构有部分组成，分别是：`RpcEnv`，`RpcEndpointRef` 和 `RpcEndpoint`。
 
@@ -13,13 +13,25 @@ tags: spark-internal
   - RpcEndpoint：接受并处理消息
 
 
-## 核心逻辑架构图
+## Spark RPC 核心逻辑
+
+### 注册
+
+![](/images/markdown-img-paste-20180429221035589.png)
+
+1. 初始化 RpcEndpoint
+2. 调用 RpcEnv 的 setupEndpoint() 方法注册 RpcEndpoint 并生成对应的 RpcEndpointRef
+3. 返回 RpcEndpointRef
+
+### 交互
 
 ![](/images/markdown-img-paste-20180426235917141.png)
 
 1. RpcEndpointRef 发送消息
 2. RpcEnv 通过 RpcEndpointRef 路由到对应的 RpcEndpoint
 3. RpcEndpoint 根据消息类型处理消息，之后将处理结果返回给对应的 RpcEndpointRef
+
+## 源码
 
 ### RpcEndpointRef
 
