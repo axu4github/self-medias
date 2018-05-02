@@ -340,8 +340,60 @@ private[netty] class NettyRpcEndpointRef(
 {% endcodeblock %}
 
 {% codeblock lang:scala NettyRpcEnv.ask() https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/NettyRpcEnv.scala NettyRpcEnv.scala %}
-
+private[netty] def ask[T: ClassTag](message: RequestMessage, timeout: RpcTimeout): Future[T] = {
+  [...]
+  // NettyRpcEndpointRef.address => Endpoint.address
+  val remoteAddr = message.receiver.address
+  // 如果 Endpoint.address 等于 NettyRpcEnv.address
+  if (remoteAddr == address) { // 本地
+    dispatcher.postLocalMessage(message, p)
+  } else { // 远程
+    val rpcMessage = RpcOutboxMessage(message.serialize(this),
+                                      onFailure,
+                                      (client, response) => onSuccess(deserialize[Any](client, response)))
+    postToOutbox(message.receiver, rpcMessage)
+  }
+}
 {% endcodeblock %}
+
+#### postLocalMessage && postMessage()
+
+{% codeblock lang:scala postLocalMessage https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/Dispatcher.scala Dispatcher.scala %}
+def postLocalMessage(message: RequestMessage, p: Promise[Any]): Unit = {
+  [...]
+  // 将 RequestMessage 转换成为 RpcMessage
+  val rpcMessage = RpcMessage(message.senderAddress, message.content, rpcCallContext)
+  // 发送一个 Rpc 消息
+  // message.receiver.name => NettyRpcEndpointRef.name => RpcEndpointAddress.name => Endpoint.name
+  postMessage(message.receiver.name, rpcMessage, (e) => p.tryFailure(e))
+}
+{% endcodeblock %}
+
+{% codeblock lang:scala postLocalMessage https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/Dispatcher.scala Dispatcher.scala %}
+private def postMessage(
+    endpointName: String,
+    message: InboxMessage,
+    callbackIfStopped: (Exception) => Unit): Unit = {
+
+  val error = synchronized {
+    // data => EndpointData
+    val data = endpoints.get(endpointName)
+    // inbox.post() => inbox.messages.add()
+    data.inbox.post(message)
+    // 待处理消息队列中添加 message
+    receivers.offer(data)
+    None
+  }
+  [...]
+}
+{% endcodeblock %}
+
+{% note danger %}
+此时若消息队列未处理应存在两条消息：
+1. OnStart ( `messages.add(OnStart)` )
+2. BoundPortsResponse ( `masterEndpoint.askSync[BoundPortsResponse](BoundPortsRequest)` )
+{% endnote %}
+
 
 ## Spark RPC (Remote Mode)
 
