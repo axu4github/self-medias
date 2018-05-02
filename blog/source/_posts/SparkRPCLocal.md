@@ -554,13 +554,47 @@ override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit
 }
 {% endcodeblock %}
 
-#### LocalNettyRpcCallContext.reply()
+#### LocalNettyRpcCallContext.reply() && NettyRpcCallContext.reply()
 
 {% note info %}
 由于是本地模式（ Local ）所以初始化 RpcMessage 的时候使用的是 LocalNettyRpcCallContext
 `val rpcCallContext = new LocalNettyRpcCallContext(message.senderAddress, p)`
 所以这里应该是调用 LocalNettyRpcCallContext.reply()
 {% endnote %}
+
+{% codeblock lang:scala - https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/NettyRpcCallContext.scala NettyRpcCallContext.scala %}
+// 由于 LocalNettyRpcCallContext 没有 reply 方法，所以调用父类 NettyRpcCallContext 的 replay 方法
+// 由于父类 NettyRpcCallContext 的 send 方法为抽象方法，所以要调用子类 LocalNettyRpcCallContext 的 send 方法
+private[netty] abstract class NettyRpcCallContext(override val senderAddress: RpcAddress)
+  extends RpcCallContext with Logging {
+  // 抽象
+  protected def send(message: Any): Unit
+  override def reply(response: Any): Unit = {
+    // 调用 send 方法
+    send(response)
+  }
+  override def sendFailure(e: Throwable): Unit = {
+    send(RpcFailure(e))
+  }
+}
+{% endcodeblock %}
+
+{% note danger %}
+由于 LocalNettyRpcCallContext 没有 reply 方法，所以调用父类 NettyRpcCallContext 的 replay 方法
+由于父类 NettyRpcCallContext 的 send 方法为抽象方法，所以要调用子类 LocalNettyRpcCallContext 的 send 方法
+{% endnote %}
+
+{% codeblock lang:scala - https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/NettyRpcCallContext.scala NettyRpcCallContext.scala %}
+private[netty] class LocalNettyRpcCallContext(
+    senderAddress: RpcAddress,
+    p: Promise[Any])
+  extends NettyRpcCallContext(senderAddress) {
+  // 最后调用 send 方法，执行 Promise.onSuccess 函数（在 NettyRpcEnv.ask 方法中注册过 Promise 的 onSuccess 函数）
+  override protected def send(message: Any): Unit = {
+    p.success(message)
+  }
+}
+{% endcodeblock %}
 
 ## Spark RPC (Remote Mode)
 
