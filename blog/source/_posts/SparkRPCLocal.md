@@ -498,6 +498,49 @@ OnStart 是 OnStart 类，所以调用 endpoint.OnStart() 方法
 BoundPortsResponse 是 RpcMessage 类，所以调用 endpoint.receiveAndReply() 方法
 {% endnote %}
 
+#### Master.OnStart()
+
+{% codeblock lang:scala - https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/deploy/master/Master.scala Master.scala %}
+override def onStart(): Unit = {
+  // 启动 MasterWebUI
+  webUi = new MasterWebUI(this, webUiPort)
+  webUi.bind()
+  // 启动 RestServer
+  if (restServerEnabled) {
+    val port = conf.getInt("spark.master.rest.port", 6066)
+    restServer = Some(new StandaloneRestServer(address.host, port, conf, self, masterUrl))
+  }
+  restServerBoundPort = restServer.map(_.start())
+  // 启动 MetricsSystem
+  masterMetricsSystem.registerSource(masterSource)
+  masterMetricsSystem.start()
+  applicationMetricsSystem.start()
+  // 设置 Master 热备模式
+  // 默认是 (new BlackHolePersistenceEngine(), new MonarchyLeaderAgent(this)) 意思是不备份，无法恢复
+  val (persistenceEngine_, leaderElectionAgent_) = RECOVERY_MODE match {
+    case "ZOOKEEPER" =>
+      logInfo("Persisting recovery state to ZooKeeper")
+      val zkFactory =
+        new ZooKeeperRecoveryModeFactory(conf, serializer)
+      (zkFactory.createPersistenceEngine(), zkFactory.createLeaderElectionAgent(this))
+    case "FILESYSTEM" =>
+      val fsFactory =
+        new FileSystemRecoveryModeFactory(conf, serializer)
+      (fsFactory.createPersistenceEngine(), fsFactory.createLeaderElectionAgent(this))
+    case "CUSTOM" =>
+      val clazz = Utils.classForName(conf.get("spark.deploy.recoveryMode.factory"))
+      val factory = clazz.getConstructor(classOf[SparkConf], classOf[Serializer])
+        .newInstance(conf, serializer)
+        .asInstanceOf[StandaloneRecoveryModeFactory]
+      (factory.createPersistenceEngine(), factory.createLeaderElectionAgent(this))
+    case _ =>
+      (new BlackHolePersistenceEngine(), new MonarchyLeaderAgent(this))
+  }
+  persistenceEngine = persistenceEngine_
+  leaderElectionAgent = leaderElectionAgent_
+}
+{% endcodeblock %}
+
 
 ## Spark RPC (Remote Mode)
 
