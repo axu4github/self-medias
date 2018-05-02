@@ -360,7 +360,7 @@ private[netty] def ask[T: ClassTag](message: RequestMessage, timeout: RpcTimeout
 
 {% codeblock lang:scala postLocalMessage https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/Dispatcher.scala Dispatcher.scala %}
 def postLocalMessage(message: RequestMessage, p: Promise[Any]): Unit = {
-  [...]
+  val rpcCallContext = new LocalNettyRpcCallContext(message.senderAddress, p)
   // 将 RequestMessage 转换成为 RpcMessage
   val rpcMessage = RpcMessage(message.senderAddress, message.content, rpcCallContext)
   // 发送一个 Rpc 消息
@@ -541,6 +541,26 @@ override def onStart(): Unit = {
 }
 {% endcodeblock %}
 
+#### Master.receiveAndReply()
+
+{% codeblock lang:scala - https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/deploy/master/Master.scala Master.scala %}
+// receiveAndReply 会根据不同的类型，做不同的处理
+// 由于本次传过来的是 BoundPortsResponse 所以我们这里只关注 BoundPortsResponse 处理方法即可
+override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
+  [...]
+  case BoundPortsRequest =>
+    context.reply(BoundPortsResponse(address.port, webUi.boundPort, restServerBoundPort))
+  [...]
+}
+{% endcodeblock %}
+
+#### LocalNettyRpcCallContext.reply()
+
+{% note info %}
+由于是本地模式（ Local ）所以初始化 RpcMessage 的时候使用的是 LocalNettyRpcCallContext
+`val rpcCallContext = new LocalNettyRpcCallContext(message.senderAddress, p)`
+所以这里应该是调用 LocalNettyRpcCallContext.reply()
+{% endnote %}
 
 ## Spark RPC (Remote Mode)
 
