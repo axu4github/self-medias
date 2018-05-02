@@ -113,7 +113,7 @@ Spark RPC 实现时分为两种模式：本地模式（Local Mode）和 远程�
 
 ## Spark RPC (Local Mode)
 
-### Master.main()
+### Master RPC
 
 #### main()
 
@@ -369,7 +369,7 @@ def postLocalMessage(message: RequestMessage, p: Promise[Any]): Unit = {
 }
 {% endcodeblock %}
 
-{% codeblock lang:scala postLocalMessage https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/Dispatcher.scala Dispatcher.scala %}
+{% codeblock lang:scala postMessage https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/Dispatcher.scala Dispatcher.scala %}
 private def postMessage(
     endpointName: String,
     message: InboxMessage,
@@ -393,6 +393,103 @@ private def postMessage(
 1. OnStart ( `messages.add(OnStart)` )
 2. BoundPortsResponse ( `masterEndpoint.askSync[BoundPortsResponse](BoundPortsRequest)` )
 {% endnote %}
+
+{% note danger %}
+至此已经完成了 Master.main() 函数中 Rpc 所有写（发送）消息的过程。
+{% endnote %}
+
+#### Dispatcher.threadpool
+
+{% note info %}
+该线程池是在初始化 Dispatcher 类时完成初始化， Dispatcher 类初始化是在初始化 NettyRpcEnv 时初始化
+也就是说在初始化 NettyRpcEnv 时，该线程池已经初始化完成
+{% endnote %}
+
+{% codeblock lang:scala - https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/Dispatcher.scala Dispatcher.scala %}
+// 该线程池是在初始化 Dispatcher 类时完成初始化， Dispatcher 类初始化是在初始化 NettyRpcEnv 时初始化
+// 也就是说在初始化 NettyRpcEnv 时，该线程池已经初始化完成
+private val threadpool: ThreadPoolExecutor = {
+  // 获取所有可用的核
+  val availableCores = if (numUsableCores > 0) numUsableCores else Runtime.getRuntime.availableProcessors()
+  // 根据核获取可用的线程数
+  val numThreads = nettyEnv.conf.getInt("spark.rpc.netty.dispatcher.numThreads", math.max(2, availableCores))
+  // 初始化一个 "dispatcher-event-loop" 线程池
+  val pool = ThreadUtils.newDaemonFixedThreadPool(numThreads, "dispatcher-event-loop")
+  // 启动线程池中的每一个线程，执行 new MessageLoop
+  for (i <\- 0 until numThreads) {
+    pool.execute(new MessageLoop)
+  }
+  // 返回线程池
+  pool
+}
+{% endcodeblock %}
+
+#### Dispatcher.MessageLoop()
+
+{% codeblock lang:scala - https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/Dispatcher.scala Dispatcher.scala %}
+// 死循环执行 receivers.take() 和 data.inbox.process(Dispatcher.this)
+private class MessageLoop extends Runnable {
+  override def run(): Unit = {
+    try {
+      while (true) {
+        try {
+          // 从待处理消息队列中取出一个待处理的消息
+          val data = receivers.take()
+          if (data == PoisonPill) {
+            // Put PoisonPill back so that other MessageLoops can see it.
+            receivers.offer(PoisonPill)
+            return
+          }
+          // 处理消息
+          data.inbox.process(Dispatcher.this)
+        } catch {
+          case NonFatal(e) => logError(e.getMessage, e)
+        }
+      }
+    } catch {
+      case ie: InterruptedException => // exit
+    }
+  }
+}
+{% endcodeblock %}
+
+#### Inbox.process()
+
+{% codeblock lang:scala - https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/Inbox.scala Inbox.scala %}
+// 实际处理消息函数
+def process(dispatcher: Dispatcher): Unit = {
+  var message: InboxMessage = null
+  inbox.synchronized {
+    // 从 inbox.messages 从取出一个
+    message = messages.poll()
+  }
+  while (true) {
+    safelyCall(endpoint) {
+      message match {
+        case RpcMessage(_sender, content, context) =>
+          endpoint.receiveAndReply(context).applyOrElse[Any, Unit](content, { msg =>
+            throw new SparkException(s"Unsupported message $message from ${_sender}")
+          })
+        case OneWayMessage(_sender, content) =>
+          endpoint.receive.applyOrElse[Any, Unit](content, { msg =>
+            throw new SparkException(s"Unsupported message $message from ${_sender}")
+          })
+        case OnStart =>
+          endpoint.onStart()
+        case OnStop =>
+          dispatcher.removeRpcEndpointRef(endpoint)
+          endpoint.onStop()
+        case RemoteProcessConnected(remoteAddress) =>
+          endpoint.onConnected(remoteAddress)
+        case RemoteProcessDisconnected(remoteAddress) =>
+          endpoint.onDisconnected(remoteAddress)
+        case RemoteProcessConnectionError(cause, remoteAddress) =>
+          endpoint.onNetworkError(cause, remoteAddress)
+      }
+    }
+  }
+}
+{% endcodeblock %}
 
 
 ## Spark RPC (Remote Mode)
