@@ -460,11 +460,12 @@ private class MessageLoop extends Runnable {
 def process(dispatcher: Dispatcher): Unit = {
   var message: InboxMessage = null
   inbox.synchronized {
-    // 从 inbox.messages 从取出一个
+    // 从 inbox.messages 从取出头元素，FIFO
     message = messages.poll()
   }
   while (true) {
     safelyCall(endpoint) {
+      // 根据不同的消息类型调用 Endpoint 不同的方法
       message match {
         case RpcMessage(_sender, content, context) =>
           endpoint.receiveAndReply(context).applyOrElse[Any, Unit](content, { msg =>
@@ -490,6 +491,12 @@ def process(dispatcher: Dispatcher): Unit = {
   }
 }
 {% endcodeblock %}
+
+{% note danger %}
+让我们看一下处理现有队列中存在消息（ OnStart, BoundPortsResponse ）的实现
+OnStart 是 OnStart 类，所以调用 endpoint.OnStart() 方法
+BoundPortsResponse 是 RpcMessage 类，所以调用 endpoint.receiveAndReply() 方法
+{% endnote %}
 
 
 ## Spark RPC (Remote Mode)
