@@ -76,4 +76,48 @@ def startRpcEnvAndEndpoint(
 接下来我们跳过 rpcEnv.setupEndpoint() 直接看 Endpoint.OnStart() ，也就是 Worker().OnStart()
 {% endnote %}
 
+## Worker 向 Master 注册
+
+### OnStart() && registerWithMaster() && tryRegisterAllMasters()
+
+{% codeblock lang:scala OnStart https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/deploy/worker/Worker.scala Worker.scala %}
+override def onStart() {
+  [...]
+  // 向 Master 注册 Worker
+  registerWithMaster()
+  [...]
+}
+{% endcodeblock %}
+
+{% codeblock lang:scala registerWithMaster https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/deploy/worker/Worker.scala Worker.scala %}
+private def registerWithMaster() {
+  [...]
+  registerMasterFutures = tryRegisterAllMasters()
+  [...]
+}
+{% endcodeblock %}
+
+{% codeblock lang:scala tryRegisterAllMasters https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/deploy/worker/Worker.scala Worker.scala %}
+private def tryRegisterAllMasters(): Array[JFuture[_]] = {
+  // 根据 Master 地址的数量，启动多个线程并行将 Worker 注册给每一个 Master
+  masterRpcAddresses.map { masterAddress =>
+    registerMasterThreadPool.submit(new Runnable {
+      override def run(): Unit = {
+        try {
+          logInfo("Connecting to master " + masterAddress + "...")
+          // 根据 Master 的地址和 ENDPOINT_NAME 获取 Master 的 NettyRpcEndpointRef
+          // 注意: rpcEnv 是 Worker 的 NettyRpcEnv
+          val masterEndpoint = rpcEnv.setupEndpointRef(masterAddress, Master.ENDPOINT_NAME)
+          // 发送注册 Worker 的消息给 Master
+          sendRegisterMessageToMaster(masterEndpoint)
+        } catch {
+          case ie: InterruptedException => // Cancelled
+          case NonFatal(e) => logWarning(s"Failed to connect to master $masterAddress", e)
+        }
+      }
+    })
+  }
+}
+{% endcodeblock %}
+
 `-EOF-`
