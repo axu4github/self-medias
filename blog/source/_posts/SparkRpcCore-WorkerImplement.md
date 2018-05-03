@@ -40,4 +40,31 @@ def main(argStrings: Array[String]) {
 }
 {% endcodeblock %}
 
+### startRpcEnvAndEndpoint()
+
+{% codeblock lang:scala - https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/deploy/worker/Worker.scala Worker.scala %}
+def startRpcEnvAndEndpoint(
+    host: String,
+    port: Int,
+    webUiPort: Int,
+    cores: Int,
+    memory: Int,
+    masterUrls: Array[String],
+    workDir: String,
+    workerNumber: Option[Int] = None,
+    conf: SparkConf = new SparkConf): RpcEnv = {
+
+  val systemName = SYSTEM_NAME + workerNumber.map(_.toString).getOrElse("")
+  val securityMgr = new SecurityManager(conf)
+  // 创建 NettyRpcEnv
+  val rpcEnv = RpcEnv.create(systemName, host, port, conf, securityMgr)
+  // 获取 Master 的地址
+  val masterAddresses = masterUrls.map(RpcAddress.fromSparkURL(_))
+  // 注册 Endpoint(Work)
+  rpcEnv.setupEndpoint(ENDPOINT_NAME, new Worker(rpcEnv, webUiPort, cores, memory,
+    masterAddresses, ENDPOINT_NAME, workDir, conf, securityMgr))
+  rpcEnv
+}
+{% endcodeblock %}
+
 `-EOF-`
