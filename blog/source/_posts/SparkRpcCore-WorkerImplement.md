@@ -199,5 +199,70 @@ private[netty] class RequestMessage(
 这里最重要的点是 RequestMessage 第一个参数是发送者，第二个参数是接受者，正好和 NettyRpcEndpointRef 的顺序相反
 {% endnote %}
 
+#### NettyRpcEnv().ask()
+
+{% note danger %}
+该方法很重要，需要完全掌握
+{% endnote %}
+
+{% codeblock lang:scala - https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/NettyRpcEnv.scala NettyRpcEnv.scala %}
+private[netty] def ask[T: ClassTag](message: RequestMessage, timeout: RpcTimeout): Future[T] = {
+  val promise = Promise[Any]()
+  // RequestMessage.NettyRpcEndpointRef.address
+  val remoteAddr = message.receiver.address
+
+  def onFailure(e: Throwable): Unit = {
+    if (!promise.tryFailure(e)) {
+      e match {
+        case e : RpcEnvStoppedException => logDebug (s"Ignored failure: $e")
+        case _ => logWarning(s"Ignored failure: $e")
+      }
+    }
+  }
+  def onSuccess(reply: Any): Unit = reply match {
+    case RpcFailure(e) => onFailure(e)
+    case rpcReply =>
+      if (!promise.trySuccess(rpcReply)) {
+        logWarning(s"Ignored message: $reply")
+      }
+  }
+  try {
+    // remoteAddr -> 接收方地址 RequestMessage.NettyRpcEndpointRef.address ，当前是 Master.address
+    // address -> 发送方地址 NettyRpcEnv.address ，当前是 Worker.address
+    if (remoteAddr == address) {
+      val p = Promise[Any]()
+      p.future.onComplete {
+        case Success(response) => onSuccess(response)
+        case Failure(e) => onFailure(e)
+      }(ThreadUtils.sameThread)
+      dispatcher.postLocalMessage(message, p)
+    } else { // 所以 verifier 的 ask 是远程 RPC 调用
+      val rpcMessage = RpcOutboxMessage(message.serialize(this),
+        onFailure,
+        (client, response) => onSuccess(deserialize[Any](client, response)))
+      postToOutbox(message.receiver, rpcMessage)
+      promise.future.failed.foreach {
+        case _: TimeoutException => rpcMessage.onTimeout()
+        case _ =>
+      }(ThreadUtils.sameThread)
+    }
+
+    val timeoutCancelable = timeoutScheduler.schedule(new Runnable {
+      override def run(): Unit = {
+        onFailure(new TimeoutException(s"Cannot receive any reply from ${remoteAddr} " +
+          s"in ${timeout.duration}"))
+      }
+    }, timeout.duration.toNanos, TimeUnit.NANOSECONDS)
+    promise.future.onComplete { v =>
+      timeoutCancelable.cancel(true)
+    }(ThreadUtils.sameThread)
+  } catch {
+    case NonFatal(e) =>
+      onFailure(e)
+  }
+  promise.future.mapTo[T].recover(timeout.addMessageIfTimeout)(ThreadUtils.sameThread)
+}
+{% endcodeblock %}
+
 
 `-EOF-`
