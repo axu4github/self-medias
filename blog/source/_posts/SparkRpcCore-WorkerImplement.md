@@ -177,5 +177,27 @@ NettyRpcEndpointRef 类的作用就是发消息，将 NettyRpcEnv.address 作为
 **这点是判断 RPC 到底使用 本地模式 还是 远程模式 的根本判断条件！**
 {% endnote %}
 
+#### NettyRpcEndpointRef().ask() && RequestMessage
+
+{% codeblock lang:scala NettyRpcEndpointRef https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/NettyRpcEnv.scala NettyRpcEnv.scala %}
+// 这里会将消息包装成为 RequestMessage
+override def ask[T: ClassTag](message: Any, timeout: RpcTimeout): Future[T] = {
+  nettyEnv.ask(new RequestMessage(nettyEnv.address, this, message), timeout)
+}
+{% endcodeblock %}
+
+{% codeblock lang:scala RequestMessage https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/NettyRpcEnv.scala NettyRpcEnv.scala %}
+private[netty] class RequestMessage(
+    val senderAddress: RpcAddress, // 发送方
+    val receiver: NettyRpcEndpointRef, // 接收方
+    val content: Any) {
+    [...]
+}
+{% endcodeblock %}
+
+{% note danger %}
+这里最重要的点是 RequestMessage 第一个参数是发送者，第二个参数是接受者，正好和 NettyRpcEndpointRef 的顺序相反
+{% endnote %}
+
 
 `-EOF-`
