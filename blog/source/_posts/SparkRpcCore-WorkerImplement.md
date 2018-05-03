@@ -120,4 +120,54 @@ private def tryRegisterAllMasters(): Array[JFuture[_]] = {
 }
 {% endcodeblock %}
 
+#### NettyRpcEnv().setupEndpointRef() && RpcEnv().setupEndpointRef()
+
+{% note info %}
+之前已经了解过 rpcEnv.setupEndpoint()
+我们现在看看 rpcEnv.setupEndpointRef() 都干了什么事情
+{% endnote %}
+
+{% note danger %}
+由于 NettyRpcEnv 没有 setupEndpointRef 方法，所以去它的父类 RpcEnv 中查找
+{% endnote %}
+
+{% codeblock lang:scala RpcEnv https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/RpcEnv.scala RpcEnv.scala %}
+// 会调用 setupEndpointRefByURI
+def setupEndpointRef(address: RpcAddress, endpointName: String): RpcEndpointRef = {
+  setupEndpointRefByURI(RpcEndpointAddress(address, endpointName).toString)
+}
+// 调用 asyncSetupEndpointRefByURI ，并同步等待结果
+def setupEndpointRefByURI(uri: String): RpcEndpointRef = {
+  defaultLookupTimeout.awaitResult(asyncSetupEndpointRefByURI(uri))
+}
+// 这里由于 asyncSetupEndpointRefByURI 是抽象方法，所以调用子类方法
+def asyncSetupEndpointRefByURI(uri: String): Future[RpcEndpointRef]
+{% endcodeblock %}
+
+{% codeblock lang:scala NettyRpcEnv https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/NettyRpcEnv.scala NettyRpcEnv.scala %}
+def asyncSetupEndpointRefByURI(uri: String): Future[RpcEndpointRef] = {
+  // uri -> MasterURI
+  val addr = RpcEndpointAddress(uri)
+
+  // this -> Worker 的 NettyRpcEnv
+  val endpointRef = new NettyRpcEndpointRef(conf, addr, this)
+
+  // addr.rpcAddress -> Master.rpcAddress
+  // RpcEndpointVerifier.NAME -> "endpoint-verifier"
+  // this -> Worker 的 NettyRpcEnv
+  val verifier = new NettyRpcEndpointRef(
+    conf, RpcEndpointAddress(addr.rpcAddress, RpcEndpointVerifier.NAME), this)
+
+  // endpointRef.name -> Master 的 ENDPOINT_NAME
+  verifier.ask[Boolean](RpcEndpointVerifier.CheckExistence(endpointRef.name)).flatMap { find =>
+    if (find) {
+      Future.successful(endpointRef)
+    } else {
+      Future.failed(new RpcEndpointNotFoundException(uri))
+    }
+  }(ThreadUtils.sameThread)
+}
+{% endcodeblock %}
+
+
 `-EOF-`
