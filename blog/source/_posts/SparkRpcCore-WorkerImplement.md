@@ -67,62 +67,13 @@ def startRpcEnvAndEndpoint(
 }
 {% endcodeblock %}
 
-#### RpcEnv.create()
-
-{% note info %}
-看过 SparkRpcCore-MasertImplement 的同学应该知道 RpcEnv.create() 其实最后会得到一个 NettyRpcEnv
-具体实现和 SparkRpcCore-MasertImplement 中的一致
+{% note danger %}
+如果看过 [SparkRpcCore-MasterImplement](http://localhost:4000/2018/05/02/SparkRpcCore-MasterImplement/) 的同学应该知道 rpcEnv.setupEndpoint() 其实是一个 RPC 的本地调用，最终会执行 Endpoint.OnStart() 方法
+由于 SparkRpcCore-MasterImplement 已经描述过整个过程，所以这里不再赘述，若有不清楚的同学可以再看一遍 [SparkRpcCore-MasterImplement](http://localhost:4000/2018/05/02/SparkRpcCore-MasterImplement/) 关于 setupEndpoint 部分的实现
 {% endnote %}
 
-{% codeblock lang:scala - https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/RpcEnv.scala RpcEnv.scala %}
-def create(
-    name: String,
-    bindAddress: String, // 默认是 host
-    advertiseAddress: String, // 默认是 bindAddress
-    port: Int,
-    conf: SparkConf,
-    securityManager: SecurityManager,
-    numUsableCores: Int, // 默认为 0
-    clientMode: Boolean): RpcEnv = { // 默认为 false
-  val config = RpcEnvConfig(conf, name, bindAddress, advertiseAddress, port, securityManager, numUsableCores, clientMode)
-  new NettyRpcEnvFactory().create(config)
-}
-{% endcodeblock %}
-
-#### NettyRpcEnvFactory().create()
-
-{% codeblock lang:scala - https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/NettyRpcEnv.scala NettyRpcEnv.scala %}
-private[rpc] class NettyRpcEnvFactory extends RpcEnvFactory with Logging {
-  // 创建 NettyRpcEnv
-  def create(config: RpcEnvConfig): RpcEnv = {
-    val sparkConf = config.conf
-    // 创建 NettyRpcEnv
-    val nettyEnv = new NettyRpcEnv(sparkConf,
-                                   javaSerializerInstance,
-                                   config.advertiseAddress,
-                                   config.securityManager,
-                                   config.numUsableCores)
-    // 如果不是 clientMode 则启动一个服务
-    if (!config.clientMode) {
-      val startNettyRpcEnv: Int => (NettyRpcEnv, Int) = { actualPort =>
-        nettyEnv.startServer(config.bindAddress, actualPort)
-        (nettyEnv, nettyEnv.address.port)
-      }
-      try {
-        Utils.startServiceOnPort(config.port, startNettyRpcEnv, sparkConf, config.name)._1
-      } catch {
-        case NonFatal(e) =>
-          nettyEnv.shutdown()
-          throw e
-      }
-    }
-    nettyEnv
-  }
-}
-{% endcodeblock %}
-
 {% note danger %}
-Worker 通过 RpcEnv.create() 方法，最终得到了 NettyRpcEnv 。
+接下来我们跳过 rpcEnv.setupEndpoint() 直接看 Endpoint.OnStart() ，也就是 Worker().OnStart()
 {% endnote %}
 
 `-EOF-`
