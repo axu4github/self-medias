@@ -152,11 +152,11 @@ def asyncSetupEndpointRefByURI(uri: String): Future[RpcEndpointRef] = {
   // this -> Worker 的 NettyRpcEnv
   val endpointRef = new NettyRpcEndpointRef(conf, addr, this)
 
-  // addr.rpcAddress -> Master.rpcAddress
-  // RpcEndpointVerifier.NAME -> "endpoint-verifier"
-  // this -> Worker 的 NettyRpcEnv
-  val verifier = new NettyRpcEndpointRef(
-    conf, RpcEndpointAddress(addr.rpcAddress, RpcEndpointVerifier.NAME), this)
+  // 初始化了一个 RpcEndpointVerifier 的 NettyRpcEndpointRef
+  // addr.rpcAddress -> Master.rpcAddress （接受方）
+  // RpcEndpointVerifier.NAME -> "endpoint-verifier" （接受方）
+  // this -> Worker 的 NettyRpcEnv （发送方）
+  val verifier = new NettyRpcEndpointRef(conf, RpcEndpointAddress(addr.rpcAddress, RpcEndpointVerifier.NAME), this)
 
   // endpointRef.name -> Master 的 ENDPOINT_NAME
   verifier.ask[Boolean](RpcEndpointVerifier.CheckExistence(endpointRef.name)).flatMap { find =>
@@ -168,6 +168,14 @@ def asyncSetupEndpointRefByURI(uri: String): Future[RpcEndpointRef] = {
   }(ThreadUtils.sameThread)
 }
 {% endcodeblock %}
+
+{% note danger %}
+**特别注意：**
+NettyRpcEndpointRef 类初始化时需要三个参数：1. SparkConf 2. RpcEndpointAddress 3. NettyRpcEnv
+NettyRpcEndpointRef 类的作用就是发消息，将 NettyRpcEnv.address 作为 **发送方** ，将 RpcEndpointAddress.address 作为 **接收方**
+**也就是说消息会从 NettyRpcEnv.address 发送给 RpcEndpointAddress.address ！**
+**这点是判断 RPC 到底使用 本地模式 还是 远程模式 的根本判断条件！**
+{% endnote %}
 
 
 `-EOF-`
