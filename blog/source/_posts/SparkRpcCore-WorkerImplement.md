@@ -22,4 +22,22 @@ Spark RPC 实现时分为两种模式：本地模式（ Local Mode ）和 远程
 
 <!-- more -->
 
+# 源码
+
+## 初始化 NettyRpcEnv
+
+### main()
+
+{% codeblock lang:scala - https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/deploy/worker/Worker.scala Worker.scala %}
+// Worker 主函数
+def main(argStrings: Array[String]) {
+    [...]
+    val rpcEnv = startRpcEnvAndEndpoint(args.host, args.port, args.webUiPort, args.cores,
+      args.memory, args.masters, args.workDir, conf = conf)
+    [...]
+    // 同步等待
+    rpcEnv.awaitTermination()
+}
+{% endcodeblock %}
+
 `-EOF-`
