@@ -20,6 +20,8 @@ Spark RPC 实现时分为两种模式：本地模式（ Local Mode ）和 远程
 说明 本地模式（ Local Mode ）下 Spark RPC 是如何完成工作的
 {% endnote %}
 
+<!-- more -->
+
 # 源码
 
 ## 初始化 NettyRpcEnv
