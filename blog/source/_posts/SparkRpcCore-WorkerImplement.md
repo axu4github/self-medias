@@ -265,5 +265,41 @@ private[netty] def ask[T: ClassTag](message: RequestMessage, timeout: RpcTimeout
 }
 {% endcodeblock %}
 
+#### NettyRpcEnv().postToOutbox()
+
+{% codeblock lang:scala - https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/NettyRpcEnv.scala NettyRpcEnv.scala %}
+private def postToOutbox(receiver: NettyRpcEndpointRef, message: OutboxMessage): Unit = {
+  if (receiver.client != null) {
+    message.sendWith(receiver.client)
+  } else {
+    val targetOutbox = {
+      // outboxes -> new ConcurrentHashMap[RpcAddress, Outbox]()
+      // receiver.address -> Master.address
+      val outbox = outboxes.get(receiver.address)
+      if (outbox == null) {
+        // this -> NettyRpcEnv (WorkerNettyRpcEnv)
+        val newOutbox = new Outbox(this, receiver.address)
+        // 这里将 newOutbox 添加到了 outboxes 中，地址是 Master 的 address
+        val oldOutbox = outboxes.putIfAbsent(receiver.address, newOutbox)
+        if (oldOutbox == null) {
+          newOutbox
+        } else {
+          oldOutbox
+        }
+      } else {
+        outbox
+      }
+    }
+    if (stopped.get) {
+      outboxes.remove(receiver.address)
+      targetOutbox.stop()
+    } else {
+      // targetOutbox -> newOutbox
+      targetOutbox.send(message)
+    }
+  }
+}
+{% endcodeblock %}
+
 
 `-EOF-`
