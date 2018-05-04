@@ -301,5 +301,26 @@ private def postToOutbox(receiver: NettyRpcEndpointRef, message: OutboxMessage):
 }
 {% endcodeblock %}
 
+#### OutBox().send()
+
+{% codeblock lang:scala - https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/Outbox.scala Outbox.scala %}
+def send(message: OutboxMessage): Unit = {
+  val dropped = synchronized {
+    if (stopped) {
+      true
+    } else {
+      // messages -> new java.util.LinkedList[OutboxMessage]
+      messages.add(message)
+      false
+    }
+  }
+  if (dropped) {
+    message.onFailure(new SparkException("Message is dropped because Outbox is stopped"))
+  } else {
+    drainOutbox()
+  }
+}
+{% endcodeblock %}
+
 
 `-EOF-`
