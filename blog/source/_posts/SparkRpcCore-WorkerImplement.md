@@ -278,6 +278,7 @@ private def postToOutbox(receiver: NettyRpcEndpointRef, message: OutboxMessage):
       val outbox = outboxes.get(receiver.address)
       if (outbox == null) {
         // this -> NettyRpcEnv (WorkerNettyRpcEnv)
+        // receiver.address -> Master 的 address
         val newOutbox = new Outbox(this, receiver.address)
         // 这里将 newOutbox 添加到了 outboxes 中，地址是 Master 的 address
         val oldOutbox = outboxes.putIfAbsent(receiver.address, newOutbox)
@@ -319,6 +320,32 @@ def send(message: OutboxMessage): Unit = {
   } else {
     drainOutbox()
   }
+}
+{% endcodeblock %}
+
+#### OutBox().drainOutbox() && launchConnectTask()
+
+{% codeblock lang:scala drainOutbox https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/Outbox.scala Outbox.scala %}
+private def drainOutbox(): Unit = {
+  [...]
+  if (client == null) {
+    // 第一次调用时，是没有 client 的，需要先初始化 client
+    launchConnectTask()
+    return
+  }
+  [...]
+}
+{% endcodeblock %}
+
+{% codeblock lang:scala launchConnectTask https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/Outbox.scala Outbox.scala %}
+private def drainOutbox(): Unit = {
+  [...]
+  if (client == null) {
+    // 第一次调用时，是没有 client 的，需要先初始化 client
+    launchConnectTask()
+    return
+  }
+  [...]
 }
 {% endcodeblock %}
 
