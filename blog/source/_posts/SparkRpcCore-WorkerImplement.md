@@ -237,9 +237,10 @@ private[netty] def ask[T: ClassTag](message: RequestMessage, timeout: RpcTimeout
       }(ThreadUtils.sameThread)
       dispatcher.postLocalMessage(message, p)
     } else { // 所以 verifier 的 ask 是远程 RPC 调用
-      val rpcMessage = RpcOutboxMessage(message.serialize(this),
-        onFailure,
-        (client, response) => onSuccess(deserialize[Any](client, response)))
+      // this -> NettyRpcEnv (WorkerNettyRpcEnv)
+      // 这里序列化消息时会调用 nettyEnv.serializeStream(out) -> javaSerializerInstance.serializeStream(out)
+      val rpcMessage = RpcOutboxMessage(message.serialize(this), onFailure, (client, response) => onSuccess(deserialize[Any](client, response)))
+      // message.receiver -> NettyRpcEndpointRef (verifier)
       postToOutbox(message.receiver, rpcMessage)
       promise.future.failed.foreach {
         case _: TimeoutException => rpcMessage.onTimeout()
