@@ -24,6 +24,8 @@ https://www.gucci.com/tr/zh/pr/c/dionysus-embroidered-shoulder-bag-p-403348K2LLN
 具有结构感的麂皮包，配以织纹虎头扣 ―此独特细节灵感来源于希腊神狄俄尼索斯 (Dionysus系列)。神话中，他曾骑在宙斯 (Zeus) 派来的老虎身上，越过底格里斯河 (Tigris)。滑动链条包带有多种背法，可在肩背和手提之间自由转换。
 一侧为水钻和贴花刺绣，另一侧为谚语刺绣 **“l’aveugle par amour（执迷于爱）”** 。
 
+<!-- more -->
+
 - GG 高级人造革，可分解材料，配以蓝色麂皮细节
 - 虎头扣
 - 手绘镶边
