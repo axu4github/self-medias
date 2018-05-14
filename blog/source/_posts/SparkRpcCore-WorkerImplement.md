@@ -338,14 +338,27 @@ private def drainOutbox(): Unit = {
 {% endcodeblock %}
 
 {% codeblock lang:scala launchConnectTask https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/Outbox.scala Outbox.scala %}
-private def drainOutbox(): Unit = {
-  [...]
-  if (client == null) {
-    // 第一次调用时，是没有 client 的，需要先初始化 client
-    launchConnectTask()
-    return
-  }
-  [...]
+private def launchConnectTask(): Unit = {
+  // 向线程池中提交一个线程处理创建 TransportClient
+  connectFuture = nettyEnv.clientConnectionExecutor.submit(new Callable[Unit] {
+    override def call(): Unit = {
+      try {
+        // 调用
+        val _client = nettyEnv.createClient(address)
+        outbox.synchronized {
+          client = _client
+          if (stopped) {
+            closeClient()
+          }
+        }
+      } catch {
+        [...]
+      }
+      outbox.synchronized { connectFuture = null }
+      // 完成后会再次调用 drainOutbox 方法
+      drainOutbox()
+    }
+  })
 }
 {% endcodeblock %}
 
