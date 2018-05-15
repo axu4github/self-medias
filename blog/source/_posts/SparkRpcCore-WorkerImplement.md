@@ -134,31 +134,39 @@ private def tryRegisterAllMasters(): Array[JFuture[_]] = {
 {% codeblock lang:scala RpcEnv https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/RpcEnv.scala RpcEnv.scala %}
 // 会调用 setupEndpointRefByURI
 def setupEndpointRef(address: RpcAddress, endpointName: String): RpcEndpointRef = {
+  // address -> masterAddress
+  // endpointName -> Master.ENDPOINT_NAME
   setupEndpointRefByURI(RpcEndpointAddress(address, endpointName).toString)
 }
 // 调用 asyncSetupEndpointRefByURI ，并同步等待结果
 def setupEndpointRefByURI(uri: String): RpcEndpointRef = {
+  // uri -> RpcEndpointAddress(masterAddress, Master.ENDPOINT_NAME).toString
   defaultLookupTimeout.awaitResult(asyncSetupEndpointRefByURI(uri))
 }
 // 这里由于 asyncSetupEndpointRefByURI 是抽象方法，所以调用子类方法
+// uri -> RpcEndpointAddress(masterAddress, Master.ENDPOINT_NAME).toString
 def asyncSetupEndpointRefByURI(uri: String): Future[RpcEndpointRef]
 {% endcodeblock %}
 
 {% codeblock lang:scala NettyRpcEnv https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/NettyRpcEnv.scala NettyRpcEnv.scala %}
+// uri -> RpcEndpointAddress(masterAddress, Master.ENDPOINT_NAME).toString
 def asyncSetupEndpointRefByURI(uri: String): Future[RpcEndpointRef] = {
-  // uri -> MasterURI
+  // uri -> RpcEndpointAddress(masterAddress, Master.ENDPOINT_NAME).toString
   val addr = RpcEndpointAddress(uri)
 
-  // this -> Worker 的 NettyRpcEnv
+  // conf -> SparkConf
+  // addr -> RpcEndpointAddress(RpcEndpointAddress(masterAddress, Master.ENDPOINT_NAME).toString)
+  // this -> WorkerNettyRpcEnv
   val endpointRef = new NettyRpcEndpointRef(conf, addr, this)
 
   // 初始化了一个 RpcEndpointVerifier 的 NettyRpcEndpointRef
-  // addr.rpcAddress -> Master.rpcAddress （接受方）
-  // RpcEndpointVerifier.NAME -> "endpoint-verifier" （接受方）
-  // this -> Worker 的 NettyRpcEnv （发送方）
+  // conf -> SparkConf
+  // addr.rpcAddress -> masterAddress（接受方）
+  // RpcEndpointVerifier.NAME -> "endpoint-verifier"（接受方）
+  // this -> WorkerNettyRpcEnv（发送方）
   val verifier = new NettyRpcEndpointRef(conf, RpcEndpointAddress(addr.rpcAddress, RpcEndpointVerifier.NAME), this)
 
-  // endpointRef.name -> Master 的 ENDPOINT_NAME
+  // endpointRef.name -> Master.ENDPOINT_NAME
   verifier.ask[Boolean](RpcEndpointVerifier.CheckExistence(endpointRef.name)).flatMap { find =>
     if (find) {
       Future.successful(endpointRef)
@@ -171,7 +179,7 @@ def asyncSetupEndpointRefByURI(uri: String): Future[RpcEndpointRef] = {
 
 {% note danger %}
 **特别注意：**
-NettyRpcEndpointRef 类初始化时需要三个参数：1. SparkConf 2. RpcEndpointAddress 3. NettyRpcEnv
+NettyRpcEndpointRef 类初始化时需要三个参数：1. SparkConf; 2. RpcEndpointAddress; 3. NettyRpcEnv;
 NettyRpcEndpointRef 类的作用就是发消息，将 NettyRpcEnv.address 作为 **发送方** ，将 RpcEndpointAddress.address 作为 **接收方**
 **也就是说消息会从 NettyRpcEnv.address 发送给 RpcEndpointAddress.address ！**
 **这点是判断 RPC 到底使用 本地模式 还是 远程模式 的根本判断条件！**
@@ -181,7 +189,12 @@ NettyRpcEndpointRef 类的作用就是发消息，将 NettyRpcEnv.address 作为
 
 {% codeblock lang:scala NettyRpcEndpointRef https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/NettyRpcEnv.scala NettyRpcEnv.scala %}
 // 这里会将消息包装成为 RequestMessage
+// message -> RpcEndpointVerifier.CheckExistence(Master.ENDPOINT_NAME)
 override def ask[T: ClassTag](message: Any, timeout: RpcTimeout): Future[T] = {
+  // nettyEnv.address -> WorkerNettyRpcEnv.address
+  // this -> RpcEndpointVerifierNettyRpcEndpointRef
+  // message-> RpcEndpointVerifier.CheckExistence(Master.ENDPOINT_NAME)
+  // timeout -> ?
   nettyEnv.ask(new RequestMessage(nettyEnv.address, this, message), timeout)
 }
 {% endcodeblock %}
@@ -206,9 +219,20 @@ private[netty] class RequestMessage(
 {% endnote %}
 
 {% codeblock lang:scala - https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/NettyRpcEnv.scala NettyRpcEnv.scala %}
+// message -> new NettyRpcEnv.RequestMessage(
+//   senderAddress -> WorkerNettyRpcEnv.address,
+//   receiver -> RpcEndpointVerifierNettyRpcEndpointRef -> new NettyRpcEndpointRef(
+//                                                           conf -> SparkConf,
+//                                                           endpointAddress -> RpcEndpointAddress(
+//                                                                                rpcAddress -> masterAddress（接受方）,
+//                                                                                name -> RpcEndpointVerifier.NAME),
+//                                                           nettyEnv -> WorkerNettyRpcEnv（发送方）
+//                                                         ),
+//   content -> RpcEndpointVerifier.CheckExistence(Master.ENDPOINT_NAME)
+// )
 private[netty] def ask[T: ClassTag](message: RequestMessage, timeout: RpcTimeout): Future[T] = {
   val promise = Promise[Any]()
-  // RequestMessage.NettyRpcEndpointRef.address
+  // message.receiver.address -> masterAddress（接受方）
   val remoteAddr = message.receiver.address
 
   def onFailure(e: Throwable): Unit = {
@@ -227,8 +251,8 @@ private[netty] def ask[T: ClassTag](message: RequestMessage, timeout: RpcTimeout
       }
   }
   try {
-    // remoteAddr -> 接收方地址 RequestMessage.NettyRpcEndpointRef.address ，当前是 Master.address
-    // address -> 发送方地址 NettyRpcEnv.address ，当前是 Worker.address
+    // remoteAddr -> masterAddress（接受方）
+    // address -> Worker.address（发送方）
     if (remoteAddr == address) {
       val p = Promise[Any]()
       p.future.onComplete {
@@ -236,12 +260,25 @@ private[netty] def ask[T: ClassTag](message: RequestMessage, timeout: RpcTimeout
         case Failure(e) => onFailure(e)
       }(ThreadUtils.sameThread)
       dispatcher.postLocalMessage(message, p)
-    } else { // 所以 verifier 的 ask 是远程 RPC 调用
-      // this -> NettyRpcEnv (WorkerNettyRpcEnv)
+    } else {
+      // 所以 verifier 的 ask 是远程 RPC 调用
+      // message.serialize(this) -> NettyRpcEnv.RequestMessage.serialize(WorkerNettyRpcEnv)
       // 这里序列化消息时会调用 nettyEnv.serializeStream(out) -> javaSerializerInstance.serializeStream(out)
+      // message.serialize(this) 返回 ByteBufferOutputStream.toByteBuffer
       val rpcMessage = RpcOutboxMessage(message.serialize(this), onFailure, (client, response) => onSuccess(deserialize[Any](client, response)))
-      // message.receiver -> NettyRpcEndpointRef (verifier)
+
+      // message.receiver -> RpcEndpointVerifierNettyRpcEndpointRef -> new NettyRpcEndpointRef(
+      //                                                                 conf -> SparkConf,
+      //                                                                 endpointAddress -> RpcEndpointAddress(
+      //                                                                                      rpcAddress -> masterAddress（接受方）,
+      //                                                                                      name -> RpcEndpointVerifier.NAME),
+      //                                                                 nettyEnv -> WorkerNettyRpcEnv（发送方）
+      //                                                               )
+      // rpcMessage -> RpcOutboxMessage(
+      //                 content -> NettyRpcEnv.RequestMessage.serialize(WorkerNettyRpcEnv),
+      //               )
       postToOutbox(message.receiver, rpcMessage)
+
       promise.future.failed.foreach {
         case _: TimeoutException => rpcMessage.onTimeout()
         case _ =>
@@ -268,20 +305,37 @@ private[netty] def ask[T: ClassTag](message: RequestMessage, timeout: RpcTimeout
 #### NettyRpcEnv().postToOutbox()
 
 {% codeblock lang:scala - https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/NettyRpcEnv.scala NettyRpcEnv.scala %}
+// receiver -> RpcEndpointVerifierNettyRpcEndpointRef -> new NettyRpcEndpointRef(
+//                                                         conf -> SparkConf,
+//                                                         endpointAddress -> RpcEndpointAddress(
+//                                                                              rpcAddress -> masterAddress（接受方）,
+//                                                                              name -> RpcEndpointVerifier.NAME),
+//                                                         nettyEnv -> WorkerNettyRpcEnv（发送方）
+//                                                       )
+// message -> RpcOutboxMessage(
+//              content -> NettyRpcEnv.RequestMessage.serialize(WorkerNettyRpcEnv),
+//            )
 private def postToOutbox(receiver: NettyRpcEndpointRef, message: OutboxMessage): Unit = {
   if (receiver.client != null) {
     message.sendWith(receiver.client)
   } else {
     val targetOutbox = {
       // outboxes -> new ConcurrentHashMap[RpcAddress, Outbox]()
-      // receiver.address -> Master.address
+      // receiver.address -> masterAddress
       val outbox = outboxes.get(receiver.address)
+
       if (outbox == null) {
-        // this -> NettyRpcEnv (WorkerNettyRpcEnv)
-        // receiver.address -> Master 的 address
+        // this -> WorkerNettyRpcEnv
+        // receiver.address -> masterAddress
         val newOutbox = new Outbox(this, receiver.address)
-        // 这里将 newOutbox 添加到了 outboxes 中，地址是 Master 的 address
+
+        // receiver.address -> masterAddress
+        // newOutbox -> Outbox(
+        //                nettyEnv -> WorkerNettyRpcEnv,
+        //                address -> masterAddress,
+        //              )
         val oldOutbox = outboxes.putIfAbsent(receiver.address, newOutbox)
+
         if (oldOutbox == null) {
           newOutbox
         } else {
@@ -291,11 +345,18 @@ private def postToOutbox(receiver: NettyRpcEndpointRef, message: OutboxMessage):
         outbox
       }
     }
+
     if (stopped.get) {
       outboxes.remove(receiver.address)
       targetOutbox.stop()
     } else {
-      // targetOutbox -> newOutbox
+      // targetOutbox -> newOutbox -> Outbox(
+      //                                nettyEnv -> WorkerNettyRpcEnv,
+      //                                address -> masterAddress,
+      //                              )
+      // message -> RpcOutboxMessage(
+      //              content -> NettyRpcEnv.RequestMessage.serialize(WorkerNettyRpcEnv),
+      //            )
       targetOutbox.send(message)
     }
   }
