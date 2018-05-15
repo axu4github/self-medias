@@ -491,7 +491,7 @@ TransportClient 通过 channel.writeAndFlush 方法将
     requestId -> Math.abs(UUID.randomUUID().getLeastSignificantBits()),
     message -> new NioManagedBuffer(NettyRpcEnv.RequestMessage.serialize(WorkerNettyRpcEnv))
   )
-  
+
 信息写入通道中，并监听等待服务端（ TransportServer ）处理结果。
 {% endnote %}
 
@@ -529,5 +529,29 @@ public long sendRpc(ByteBuffer message, RpcResponseCallback callback) {
 }
 {% endcodeblock %}
 
+#### NettyRpcHandler().receive() && NettyRpcHandler().internalReceive()
+
+{% note danger %}
+服务端（ TransportServer ）会监听通道（Channel），当有信息发送时，通道会调用已注册的处理器（ NettyRpcHandler ）的 receive 方法处理发送过来的信息。
+
+**整个发送和接收的过程是由 Netty 实现。**
+{% endnote %}
+
+{% codeblock lang:scala NettyRpcHandler().receive https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/NettyRpcEnv.scala NettyRpcEnv.scala %}
+// dispatcher -> MasterDispatcher
+// nettyEnv -> MasterNettyRpcEnv
+private[netty] class NettyRpcHandler(
+    dispatcher: Dispatcher,
+    nettyEnv: NettyRpcEnv,
+    streamManager: StreamManager) extends RpcHandler with Logging {
+
+  override def receive(
+      client: TransportClient,
+      message: ByteBuffer): Unit = {
+    val messageToDispatch = internalReceive(client, message)
+    dispatcher.postOneWayMessage(messageToDispatch)
+  }
+}
+{% endcodeblock %}
 
 `-EOF-`
