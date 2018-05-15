@@ -460,7 +460,7 @@ private def drainOutbox(): Unit = {
 }
 {% endcodeblock %}
 
-{% codeblock lang:scala sendWith https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/Outbox.scala Outbox.scala %}
+{% codeblock lang:scala RpcOutboxMessage().sendWith https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/Outbox.scala Outbox.scala %}
 private[netty] case class RpcOutboxMessage(
     content: ByteBuffer,
     _onFailure: (Throwable) => Unit,
@@ -479,5 +479,55 @@ private[netty] case class RpcOutboxMessage(
   [...]
 }
 {% endcodeblock %}
+
+#### TransportClient().sendRpc()
+
+{% note danger %}
+客户端（ TransportClient ）将信息写入通道（ Channel ）
+
+TransportClient 通过 channel.writeAndFlush 方法将
+
+  RpcRequest(
+    requestId -> Math.abs(UUID.randomUUID().getLeastSignificantBits()),
+    message -> new NioManagedBuffer(NettyRpcEnv.RequestMessage.serialize(WorkerNettyRpcEnv))
+  )
+  
+信息写入通道中，并监听等待服务端（ TransportServer ）处理结果。
+{% endnote %}
+
+{% codeblock lang:java - https://github.com/apache/spark/blob/v2.3.0/common/network-common/src/main/java/org/apache/spark/network/client/TransportClient.java TransportClient.java %}
+// message -> NettyRpcEnv.RequestMessage.serialize(WorkerNettyRpcEnv)
+// callback -> RpcOutboxMessage
+public long sendRpc(ByteBuffer message, RpcResponseCallback callback) {
+  [...]
+
+  long requestId = Math.abs(UUID.randomUUID().getLeastSignificantBits());
+  // callback -> RpcOutboxMessage
+  handler.addRpcRequest(requestId, callback);
+
+  // requestId -> Math.abs(UUID.randomUUID().getLeastSignificantBits());
+  // message -> NettyRpcEnv.RequestMessage.serialize(WorkerNettyRpcEnv)
+  channel.writeAndFlush(new RpcRequest(requestId, new NioManagedBuffer(message)))
+      .addListener(future -> {
+        if (future.isSuccess()) {
+          [...]
+        } else {
+          String errorMsg = String.format("Failed to send RPC %s to %s: %s", requestId,
+            getRemoteAddress(channel), future.cause());
+          logger.error(errorMsg, future.cause());
+          handler.removeRpcRequest(requestId);
+          channel.close();
+          try {
+            callback.onFailure(new IOException(errorMsg, future.cause()));
+          } catch (Exception e) {
+            logger.error("Uncaught exception in RPC response callback handler!", e);
+          }
+        }
+      });
+
+  return requestId;
+}
+{% endcodeblock %}
+
 
 `-EOF-`
