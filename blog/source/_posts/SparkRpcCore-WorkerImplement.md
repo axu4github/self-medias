@@ -366,12 +366,16 @@ private def postToOutbox(receiver: NettyRpcEndpointRef, message: OutboxMessage):
 #### OutBox().send()
 
 {% codeblock lang:scala - https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/Outbox.scala Outbox.scala %}
+// message -> RpcOutboxMessage(
+//              content -> NettyRpcEnv.RequestMessage.serialize(WorkerNettyRpcEnv),
+//            )
 def send(message: OutboxMessage): Unit = {
   val dropped = synchronized {
     if (stopped) {
       true
     } else {
       // messages -> new java.util.LinkedList[OutboxMessage]
+      // messages -> [RpcOutboxMessage(content -> NettyRpcEnv.RequestMessage.serialize(WorkerNettyRpcEnv)), ]
       messages.add(message)
       false
     }
@@ -384,7 +388,7 @@ def send(message: OutboxMessage): Unit = {
 }
 {% endcodeblock %}
 
-#### OutBox().drainOutbox() && launchConnectTask()
+#### OutBox().drainOutbox() && launchConnectTask() && OutBox().drainOutbox() && RpcOutboxMessage().sendWith()
 
 {% codeblock lang:scala drainOutbox https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/Outbox.scala Outbox.scala %}
 private def drainOutbox(): Unit = {
@@ -404,7 +408,8 @@ private def launchConnectTask(): Unit = {
   connectFuture = nettyEnv.clientConnectionExecutor.submit(new Callable[Unit] {
     override def call(): Unit = {
       try {
-        // 调用
+        // nettyEnv -> WorkerNettyRpcEnv
+        // address -> masterAddress
         val _client = nettyEnv.createClient(address)
         outbox.synchronized {
           client = _client
@@ -423,5 +428,56 @@ private def launchConnectTask(): Unit = {
 }
 {% endcodeblock %}
 
+{% codeblock lang:scala drainOutbox https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/Outbox.scala Outbox.scala %}
+private def drainOutbox(): Unit = {
+  [...]
+  // messages -> [RpcOutboxMessage(content -> NettyRpcEnv.RequestMessage.serialize(WorkerNettyRpcEnv)), ]
+  // message -> RpcOutboxMessage(content -> NettyRpcEnv.RequestMessage.serialize(WorkerNettyRpcEnv))
+  message = messages.poll()
+  draining = true
+  [...]
+
+  while (true) {
+    [...]
+    val _client = synchronized { client }
+    if (_client != null) {
+      // message -> RpcOutboxMessage(content -> NettyRpcEnv.RequestMessage.serialize(WorkerNettyRpcEnv))
+      message.sendWith(_client)
+    }
+    [...]
+
+    synchronized {
+      if (stopped) {
+        return
+      }
+      message = messages.poll()
+      if (message == null) {
+        draining = false
+        return
+      }
+    }
+  }
+}
+{% endcodeblock %}
+
+{% codeblock lang:scala sendWith https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/Outbox.scala Outbox.scala %}
+private[netty] case class RpcOutboxMessage(
+    content: ByteBuffer,
+    _onFailure: (Throwable) => Unit,
+    _onSuccess: (TransportClient, ByteBuffer) => Unit)
+  extends OutboxMessage with RpcResponseCallback with Logging {
+
+  // client -> WorkerTransportClient
+  override def sendWith(client: TransportClient): Unit = {
+    this.client = client
+    // client -> WorkerTransportClient
+    // content -> NettyRpcEnv.RequestMessage.serialize(WorkerNettyRpcEnv)
+    // this -> RpcOutboxMessage
+    this.requestId = client.sendRpc(content, this)
+  }
+
+  [...]
+}
+{% endcodeblock %}
 
 `-EOF-`
