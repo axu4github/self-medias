@@ -406,8 +406,8 @@ font:
   # Fallback to `global` font settings.
   logo:
     external: true
-    family:
-    size:
+    family: "XiaoDouDaoMoMoZhiCaoShuJian"
+    size: 55
 
   # Font settings for <code> and code blocks.
   codes:
