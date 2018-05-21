@@ -529,7 +529,7 @@ public long sendRpc(ByteBuffer message, RpcResponseCallback callback) {
 }
 {% endcodeblock %}
 
-#### NettyRpcHandler().receive() && NettyRpcHandler().internalReceive()
+#### NettyRpcHandler.receive() && NettyRpcHandler.internalReceive() && NettyRpcEnv.RequestMessage.apply()
 
 {% note danger %}
 服务端（ TransportServer ）会监听通道（Channel），当有信息发送时，通道会调用已注册的处理器（ NettyRpcHandler ）的 receive 方法处理发送过来的信息。
@@ -537,7 +537,7 @@ public long sendRpc(ByteBuffer message, RpcResponseCallback callback) {
 **整个发送和接收的过程是由 Netty 实现。**
 {% endnote %}
 
-{% codeblock lang:scala NettyRpcHandler().receive https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/NettyRpcEnv.scala NettyRpcEnv.scala %}
+{% codeblock lang:scala - https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/NettyRpcEnv.scala NettyRpcEnv.scala %}
 // dispatcher -> MasterDispatcher
 // nettyEnv -> MasterNettyRpcEnv
 private[netty] class NettyRpcHandler(
@@ -545,12 +545,93 @@ private[netty] class NettyRpcHandler(
     nettyEnv: NettyRpcEnv,
     streamManager: StreamManager) extends RpcHandler with Logging {
 
-  override def receive(
-      client: TransportClient,
-      message: ByteBuffer): Unit = {
-    val messageToDispatch = internalReceive(client, message)
-    dispatcher.postOneWayMessage(messageToDispatch)
+    override def receive(
+        client: TransportClient,
+        message: ByteBuffer,
+        callback: RpcResponseCallback): Unit = {
+      // client -> WorkerTransportClient
+      // message -> WorkerNettyRpcEnvByteBuffer
+      val messageToDispatch = internalReceive(client, message)
+      dispatcher.postRemoteMessage(messageToDispatch, callback)
+    }
+
+    // client -> WorkerTransportClient
+    // message -> WorkerNettyRpcEnvByteBuffer
+    private def internalReceive(client: TransportClient, message: ByteBuffer): RequestMessage = {
+      // addr -> WorkerAddress
+      val addr = client.getChannel().remoteAddress().asInstanceOf[InetSocketAddress]
+      assert(addr != null)
+
+      // clientAddr -> WorkerAddress
+      val clientAddr = RpcAddress(addr.getHostString, addr.getPort)
+
+      // nettyEnv -> MasterNettyRpcEnv
+      // client -> WorkerTransportClient
+      // message -> WorkerNettyRpcEnvByteBuffer
+      val requestMessage = RequestMessage(nettyEnv, client, message)
+      if (requestMessage.senderAddress == null) {
+        // Create a new message with the socket address of the client as the sender.
+        new RequestMessage(clientAddr, requestMessage.receiver, requestMessage.content)
+      } else {
+        // The remote RpcEnv listens to some port, we should also fire a RemoteProcessConnected for
+        // the listening address
+        val remoteEnvAddress = requestMessage.senderAddress
+        if (remoteAddresses.putIfAbsent(clientAddr, remoteEnvAddress) == null) {
+          dispatcher.postToAll(RemoteProcessConnected(remoteEnvAddress))
+        }
+        requestMessage
+      }
+    }
+}
+
+private[netty] object RequestMessage {
+
+  private def readRpcAddress(in: DataInputStream): RpcAddress = {
+    val hasRpcAddress = in.readBoolean()
+    if (hasRpcAddress) {
+      RpcAddress(in.readUTF(), in.readInt())
+    } else {
+      null
+    }
   }
+
+  // nettyEnv -> MasterNettyRpcEnv
+  // client -> WorkerTransportClient
+  // bytes -> WorkerNettyRpcEnvByteBuffer
+  def apply(nettyEnv: NettyRpcEnv, client: TransportClient, bytes: ByteBuffer): RequestMessage = {
+    val bis = new ByteBufferInputStream(bytes)
+    val in = new DataInputStream(bis)
+    try {
+      val senderAddress = readRpcAddress(in)
+      val endpointAddress = RpcEndpointAddress(readRpcAddress(in), in.readUTF())
+      val ref = new NettyRpcEndpointRef(nettyEnv.conf, endpointAddress, nettyEnv)
+      ref.client = client
+      new RequestMessage(
+        senderAddress,
+        ref,
+        // The remaining bytes in `bytes` are the message content.
+        nettyEnv.deserialize(client, bytes))
+    } finally {
+      in.close()
+    }
+  }
+}
+
+
+
+
+{% endcodeblock %}
+
+
+
+#### Dispatcher.postRemoteMessage() &&  Dispatcher.postMessage()
+
+{% codeblock lang:scala - https://github.com/apache/spark/blob/v2.3.0/core/src/main/scala/org/apache/spark/rpc/netty/Dispatcher.scala Dispatcher.scala %}
+
+def postRemoteMessage(message: RequestMessage, callback: RpcResponseCallback): Unit = {
+  val rpcCallContext = new RemoteNettyRpcCallContext(nettyEnv, callback, message.senderAddress)
+  val rpcMessage = RpcMessage(message.senderAddress, message.content, rpcCallContext)
+  postMessage(message.receiver.name, rpcMessage, (e) => callback.onFailure(e))
 }
 {% endcodeblock %}
 
